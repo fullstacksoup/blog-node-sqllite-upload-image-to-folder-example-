@@ -30,33 +30,18 @@ var db = new TransactionDatabase(
             Id INTEGER PRIMARY KEY AUTOINCREMENT,              
             Username TEXT,             
             DateModified DATE,
-            DateCreated DATE
+            DateJoined DATE
             )`,
         (err) => {
             if (err) {
                 // Table already created
             }else{
                 // Table just created, creating some rows
-                var insert = 'INSERT INTO Users (Username, DateCreated) VALUES (?,?)'
+                var insert = 'INSERT INTO Users (Username, DateCreated) VALUES (?,?,?,?)'
                 db.run(insert, ["lisa33",  Date('now')])
                 db.run(insert, ["craig44", Date('now')])
                 db.run(insert, ["alan54",  Date('now')])
                 db.run(insert, ["tracy65", Date('now')])
-            }
-        });  
-
-        db.run(`CREATE TABLE UserImages (
-            Id INTEGER PRIMARY KEY AUTOINCREMENT,
-            UserId INTEGER,                         
-            Mimetype TEXT,                         
-            Filename TEXT,                         
-            Size INTEGER,                         
-            DateModified DATE,
-            DateCreated DATE
-            )`,
-        (err) => {
-            if (err) {
-                // Table already created
             }
         });  
     }
@@ -169,7 +154,7 @@ app.delete("/api/user/:id", async (req, res, next) => {
     db.beginTransaction(function(err, transaction) {
 
         // SELECT IMAGES FOR THIS RECORD - DELETE THE FILES & SUB DIRECTORY
-        db.all('SELECT Filename FROM UserImages WHERE UserId = ?', req.params.id, (err, rows) => {
+        db.all('SELECT Name FROM UserImages WHERE Id = ?', req.params.id, (err, rows) => {
             if (err) {
               res.status(400).json({"error":err.message});
               return;
@@ -178,7 +163,7 @@ app.delete("/api/user/:id", async (req, res, next) => {
             // DELETE THE FILES FROM THE QUERY DATA (rows)
             rows.forEach(item => {
                 console.log(item.Name);
-                var filePath = `./images/${req.params.id}/${item.Filename}`;
+                var filePath = `./images/${req.params.id}/${item.Name}`;
                 
                 console.log('filePath', filePath);
                 try {
@@ -203,7 +188,7 @@ app.delete("/api/user/:id", async (req, res, next) => {
 
         // DELETE IMAGE RECORDS
         db.run(
-            'DELETE FROM UserImages WHERE UserId = ?',
+            'DELETE FROM UserImages WHERE VehicleId = ?',
             req.params.id,
             function (err, result) {
                 if (err){
@@ -233,14 +218,13 @@ app.delete("/api/user/:id", async (req, res, next) => {
 
 const upload = multer({ dest: './images/' })
 app.post('/api/upload-single-file', upload.single('files'), function async (req, res) {
-
     var dir = `./images/${req.body.UserId}/`;
 
     if (!fs.existsSync(dir)){
         fs.mkdirSync(dir, { recursive: true });
     }
     var oldPath = `./images/${req.file.filename}`    
-    var newPath = `./images/${req.body.UserId}/${req.file.filename}.jpg`;
+    var newPath = `./images/${req.body.VehicleId}/${req.file.filename}.jpg`;
 
     fs.rename(oldPath, newPath, function (err) {
       if (err) throw err
@@ -248,15 +232,15 @@ app.post('/api/upload-single-file', upload.single('files'), function async (req,
     })
 
     var data = {
-        UserId: req.body.UserId,
+        VehicleId: req.body.VehicleId,
         Name: req.file.filename,
         Mimetype: req.file.mimetype,
         Size: req.file.size,
         DateCreated: Date('now')
     }
 
-    var sql ='INSERT INTO UserImages (UserId, Filename, Mimetype, Size, DateCreated) VALUES (?,?,?,?,?)'
-    var params = [data.UserId, data.Name, data.Mimetype, data.Size, Date('now')]
+    var sql ='INSERT INTO VehicleImages (VehicleId, Name, Mimetype, Size, DateCreated) VALUES (?,?,?,?,?)'
+    var params = [data.VehicleId, data.Name, data.Mimetype, data.Size, Date('now')]
 
     db.run(sql, params, function (err, result) {
         if (err){
@@ -274,7 +258,7 @@ app.post('/api/upload-single-file', upload.single('files'), function async (req,
 var uploads = multer();
 app.post('/api/upload-multiple-files', uploads.array('files', 3), function async (req, res) {
     var file = req.files;
-    var fileCount = 0;
+
     var dir = `./images/${req.body.UserId}/`;
     file.forEach(element => {
 
@@ -285,32 +269,38 @@ app.post('/api/upload-multiple-files', uploads.array('files', 3), function async
         var newPath = `./images/${req.body.UserId}/${newFileName}`;
         var imageBinary = element.buffer;
         try {
-            fs.writeFile(newPath, imageBinary, 'base64', function(err){});                
+            fs.writeFile(newPath, imageBinary, 'base64', function(err){});    
+            console.log("Success Creating New File");
         } catch (error) {
             console.log(error);
         }                
         var data = {
-            UserId: req.body.UserId,
-            Filename: newFileName,
+            VehicleId: req.body.UserId,
+            Name: newFileName,
             Mimetype: element.mimetype,
             Size: element.size,
             DateCreated: Date('now')
         }
-        var sql ='INSERT INTO UserImages (UserId, Filename, Mimetype, Size, DateCreated) VALUES (?,?,?,?,?)'
-        var params = [data.UserId, data.Filename, data.Mimetype, data.Size, Date('now')]
-    
-        db.run(sql, params, function (err, result) {
-            if (err){
-                res.status(400).json({"error": err.message})
-                return;
-            }
-        });       
-        fileCount++;
+
+        db.beginTransaction(function(err, transaction) {
+            var sql ='INSERT INTO UserImages (UserId, Name, Mimetype, Size, DateCreated) VALUES (?,?,?,?,?)'
+            var params =[data.VehicleId, data.Name, data.Mimetype, data.Size, Date('now')]
+
+            db.run(sql, params, function (err, result) {
+                if (err){
+                    res.status(400).json({"error": err.message})
+                    return;
+                }
+            });   
+
+            transaction.commit(function(err) {
+                if (err) return console.log("Sad panda :-( commit() failed.", err);
+                console.log("Happy panda :-) commit() was successful.");
+            });
+        });
     });
 
-    res.json({
-        message: `Successfully uploaded ${fileCount} files`
-    })    
+    res.status(200).json(req.file)
 });
 
 
