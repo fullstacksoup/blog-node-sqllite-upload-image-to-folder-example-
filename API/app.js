@@ -1,12 +1,10 @@
 const express = require('express');
 const app = express();
 const port = 3003;
-// var sqlite3 = require('sqlite3').verbose()
 var fs = require('fs');
 const cors = require('cors');
 const multer  = require('multer')
 const { v4: uuidv4 } = require('uuid');
-const { randomUUID } = require('crypto');
 
 var sqlite3 = require("sqlite3"),
     TransactionDatabase = require("sqlite3-transactions").TransactionDatabase;
@@ -114,17 +112,19 @@ app.post("/api/user", async (req, res) => {
         errors.push("Username is missing");
     }
 
+    // Just in case there are more fields missing
     if (errors.length){
         res.status(400).json({"error":errors.join(",")});
         return;
     }
+
     var data = {
         Username: req.body.Username,        
         DateCreated: Date('now')
     }
 
     var sql ='INSERT INTO Users (Username, DateCreated) VALUES (?,?)'
-    var params =[data.Make, data.Model, Date('now')]
+    var params =[data.Username,  Date('now')]
 
     db.run(sql, params, function (err, result) {
         if (err){
@@ -140,7 +140,19 @@ app.post("/api/user", async (req, res) => {
 })
 
 // U P D A T E
-app.patch("/api/user/:id", async (req, res, next) => {
+app.patch("/api/user/:id", async (req, res) => {
+    var errors=[]
+
+    if (!req.body.Username){
+        errors.push("Username is missing");
+    }
+
+    // Just in case there are more fields missing
+    if (errors.length){
+        res.status(400).json({"error":errors.join(",")});
+        return;
+    }
+
     var data = [req.body.Username, Date('now'), req.params.id];
     
     let sql = `UPDATE Users SET 
@@ -148,7 +160,7 @@ app.patch("/api/user/:id", async (req, res, next) => {
                DateModified = ?
                WHERE Id = ?`;
     
-    db.run(sql, data, function(err) {
+    await db.run(sql, data, function(err) {
       if (err) {
         return console.error(err.message);
       }
@@ -158,7 +170,7 @@ app.patch("/api/user/:id", async (req, res, next) => {
     
     res.json({
         message: "success",
-        data: data,
+        id: req.params.id,                
         changes: this.changes
     })    
 })
@@ -224,48 +236,71 @@ app.delete("/api/user/:id", async (req, res, next) => {
         });
 
         transaction.commit(function(err) {
-            if (err) return console.log("Sad panda :-( commit() failed.", err);
-            console.log("Happy panda :-) commit() was successful.");
+            if (err) return console.log("Commit() failed.", err);
+            //. console.log("Commit() was successful.");
         });
     });
+    res.json({
+        message: `Record and Images Deleted`
+    })    
 })
 
 
 const upload = multer({ dest: './images/' })
 app.post('/api/upload-single-file', upload.single('files'), function async (req, res) {
+    var isUserExists = true;
 
-    var dir = `./images/${req.body.UserId}/`;
+    var sql = "SELECT * FROM Users WHERE Id = ?";
 
-    if (!fs.existsSync(dir)){
-        fs.mkdirSync(dir, { recursive: true });
-    }
-    var oldPath = `./images/${req.file.filename}`    
-    var newPath = `./images/${req.body.UserId}/${req.file.filename}.jpg`;
+    db.all(sql, req.body.UserId, (err, rows) => {
 
-    fs.rename(oldPath, newPath, function (err) {
-      if (err) throw err
-      console.log('Successfully Moved File')
-    })
-
-    var data = {
-        UserId: req.body.UserId,
-        Name: req.file.filename,
-        Mimetype: req.file.mimetype,
-        Size: req.file.size,
-        DateCreated: Date('now')
-    }
-
-    var sql ='INSERT INTO UserImages (UserId, Filename, Mimetype, Size, DateCreated) VALUES (?,?,?,?,?)'
-    var params = [data.UserId, data.Name, data.Mimetype, data.Size, Date('now')]
-
-    db.run(sql, params, function (err, result) {
-        if (err){
-            res.status(400).json({"error": err.message})
-            return;
+        if (err) {
+          res.status(400).json({"error":err.message});
+          return;
         }
-    });   
+        
+        isUserExists = (rows.length > 0)? true : false;
+        
+        if(isUserExists) {
+            var dir = `./images/${req.body.UserId}/`;
 
-    res.status(200).json(req.file)
+            if (!fs.existsSync(dir)){
+                fs.mkdirSync(dir, { recursive: true });
+            }
+            var oldPath = `./images/${req.file.filename}`    
+            var newPath = `./images/${req.body.UserId}/${req.file.filename}.jpg`;
+
+            fs.rename(oldPath, newPath, function (err) {
+            if (err) throw err
+            console.log('Successfully Moved File')
+            })
+
+            var data = {
+                UserId: req.body.UserId,
+                Name: req.file.filename,
+                Mimetype: req.file.mimetype,
+                Size: req.file.size,
+                DateCreated: Date('now')
+            }
+
+            var sql ='INSERT INTO UserImages (UserId, Filename, Mimetype, Size, DateCreated) VALUES (?,?,?,?,?)'
+            var params = [data.UserId, data.Name, data.Mimetype, data.Size, Date('now')]
+
+            db.run(sql, params, function (err, result) {
+                if (err){
+                    res.status(400).json({"error": err.message})
+                    return;
+                }
+            });   
+
+            res.status(200).json(req.file)
+        }
+        else {
+            res.json({
+                message: `Record does not exist`
+            })    
+        }
+    })    
 });
 
 
@@ -275,42 +310,67 @@ var uploads = multer();
 app.post('/api/upload-multiple-files', uploads.array('files', 3), function async (req, res) {
     var file = req.files;
     var fileCount = 0;
-    var dir = `./images/${req.body.UserId}/`;
-    file.forEach(element => {
-
-        if (!fs.existsSync(dir)){
-            fs.mkdirSync(dir, { recursive: true });
-        }
-        var newFileName = `${uuidv4()}.jpg`;        
-        var newPath = `./images/${req.body.UserId}/${newFileName}`;
-        var imageBinary = element.buffer;
-        try {
-            fs.writeFile(newPath, imageBinary, 'base64', function(err){});                
-        } catch (error) {
-            console.log(error);
-        }                
-        var data = {
-            UserId: req.body.UserId,
-            Filename: newFileName,
-            Mimetype: element.mimetype,
-            Size: element.size,
-            DateCreated: Date('now')
-        }
-        var sql ='INSERT INTO UserImages (UserId, Filename, Mimetype, Size, DateCreated) VALUES (?,?,?,?,?)'
-        var params = [data.UserId, data.Filename, data.Mimetype, data.Size, Date('now')]
     
-        db.run(sql, params, function (err, result) {
-            if (err){
-                res.status(400).json({"error": err.message})
-                return;
-            }
-        });       
-        fileCount++;
+    var isUserExists = true;
+
+    var sql = "SELECT * FROM Users WHERE Id = ?"
+    db.all(sql, req.body.UserId, (err, rows) => {
+        if (err) {
+          res.status(400).json({"error":err.message});
+          return;
+        }
+        
+        isUserExists = (rows.length > 0)? true : false;        
+        
+        if(isUserExists) {
+
+            var dir = `./images/${req.body.UserId}/`;
+    
+            file.forEach(element => {
+    
+                if (!fs.existsSync(dir)){
+                    fs.mkdirSync(dir, { recursive: true });
+                }
+                var newFileName = `${uuidv4()}.jpg`;        
+                var newPath = `./images/${req.body.UserId}/${newFileName}`;
+                var imageBinary = element.buffer;
+                try {
+                    fs.writeFile(newPath, imageBinary, 'base64', function(err){});                
+                } catch (error) {
+                    console.log(error);
+                }                
+                var data = {
+                    UserId: req.body.UserId,
+                    Filename: newFileName,
+                    Mimetype: element.mimetype,
+                    Size: element.size,
+                    DateCreated: Date('now')
+                }
+                var sql ='INSERT INTO UserImages (UserId, Filename, Mimetype, Size, DateCreated) VALUES (?,?,?,?,?)'
+                var params = [data.UserId, data.Filename, data.Mimetype, data.Size, Date('now')]
+            
+                db.run(sql, params, function (err, result) {
+                    if (err){
+                        res.status(400).json({"error": err.message})
+                        return;
+                    }
+                });       
+                fileCount++;
+            });
+    
+            res.json({
+                message: `Successfully uploaded ${fileCount} files`
+            })    
+        }
+        else {
+            res.json({
+                message: `Record does not exist`
+            })    
+        }
+        
     });
 
-    res.json({
-        message: `Successfully uploaded ${fileCount} files`
-    })    
+
 });
 
 
